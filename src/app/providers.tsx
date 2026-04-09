@@ -19,6 +19,8 @@ const wagmiConfig = createConfig({
   },
 });
 
+const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || '';
+
 export default function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: { queries: { staleTime: 5 * 60 * 1000 } },
@@ -27,37 +29,38 @@ export default function Providers({ children }: { children: ReactNode }) {
 
   useEffect(() => { setMounted(true); }, []);
 
-  const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
+  if (!mounted) {
+    return <div style={{ minHeight: '100dvh', background: '#080808' }} />;
+  }
 
-  // Don't render Privy during SSR or without a valid app ID
-  if (!mounted || !appId) {
-    return <>{children}</>;
+  if (!PRIVY_APP_ID) {
+    return (
+      <div style={{
+        minHeight: '100dvh', background: '#080808', color: '#F26F21',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        padding: 24, textAlign: 'center', fontFamily: 'system-ui',
+      }}>
+        <div style={{ fontSize: 32, fontWeight: 900, marginBottom: 12 }}>L</div>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>NEXT_PUBLIC_PRIVY_APP_ID not set</div>
+        <div style={{ fontSize: 12, color: '#888' }}>Add it to .env.local or Vercel env vars and redeploy.</div>
+      </div>
+    );
   }
 
   return (
     <PrivyProvider
-      appId={appId}
+      appId={PRIVY_APP_ID}
       config={{
-        appearance: {
-          theme: 'light',
-          accentColor: '#F26F21',
-          logo: undefined,
-        },
+        appearance: { theme: 'light', accentColor: '#F26F21', logo: undefined },
         loginMethods: ['email', 'google', 'apple'],
-        embeddedWallets: {
-          ethereum: {
-            createOnLogin: 'users-without-wallets',
-          },
-        },
+        embeddedWallets: { ethereum: { createOnLogin: 'users-without-wallets' } },
         defaultChain: base,
         supportedChains: [base, arbitrum, mainnet, optimism, polygon],
       }}
     >
       <QueryClientProvider client={queryClient}>
         <WagmiProvider config={wagmiConfig}>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+          <ToastProvider>{children}</ToastProvider>
         </WagmiProvider>
       </QueryClientProvider>
     </PrivyProvider>
