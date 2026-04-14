@@ -7,6 +7,7 @@ import { SectionLabel, ProgressRing, Sparkline, Card, Button } from '@/component
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
+import { getTrackedVaults } from '@/lib/wallet/deposit-tracker';
 
 interface Balance { chain: string; symbol: string; amount: number }
 interface Position {
@@ -56,10 +57,21 @@ export default function HomePage() {
       .finally(() => setLoadingBal(false));
   }, [walletAddress]);
 
-  // Fetch live positions from LI.FI
+  // Fetch live positions — uses tracked vaults for instant display
   useEffect(() => {
     if (!walletAddress) { setLoadingPos(false); return; }
-    fetch(`/api/portfolio?wallet=${walletAddress}`)
+
+    const trackedVaults = getTrackedVaults();
+
+    const fetchPortfolio = trackedVaults.length > 0
+      ? fetch('/api/portfolio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
+        })
+      : fetch(`/api/portfolio?wallet=${walletAddress}`);
+
+    fetchPortfolio
       .then(r => r.json())
       .then(d => {
         const pos: Position[] = (d.positions || []).map((p: any, i: number) => ({
@@ -78,7 +90,7 @@ export default function HomePage() {
           shareDecimals: p.asset?.decimals || 18,
           shareBalanceRaw: p.balanceNative || '0',
         }));
-        setPositions(pos);
+        setPositions(pos.filter(p => p.current > 0.001));
       })
       .catch(() => {})
       .finally(() => setLoadingPos(false));

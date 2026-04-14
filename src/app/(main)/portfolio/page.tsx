@@ -3,20 +3,19 @@ export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from 'react';
 import { COLORS, PROTOCOL_NAMES } from '@/constants/theme';
-import { SectionLabel, VaultBadge, Badge, Sparkline, AllocationDonut, StrategyBar, Button, Card } from '@/components/ui';
+import { SectionLabel, VaultBadge, Badge, AllocationDonut, StrategyBar, Button, Card } from '@/components/ui';
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
+import { getTrackedVaults, removeTrackedVault } from '@/lib/wallet/deposit-tracker';
 
 interface Position {
   name: string; chain: string; token: string;
   current: number; color: string; letter: string;
   protocolName: string; chainId: number;
-  // Fields needed for real withdrawal
-  vaultAddress: string;
-  underlyingTokenAddress: string;
-  shareDecimals: number;
-  shareBalanceRaw: string;
+  vaultAddress: string; underlyingTokenAddress: string;
+  shareDecimals: number; shareBalanceRaw: string;
+  source: string; // 'lifi' | 'onchain'
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender, COLORS.orange];
@@ -31,7 +30,19 @@ export default function PortfolioPage() {
 
   useEffect(() => {
     if (!walletAddress) { setLoading(false); return; }
-    fetch(`/api/portfolio?wallet=${walletAddress}`)
+
+    const trackedVaults = getTrackedVaults();
+
+    // Use POST if we have tracked vaults (checks on-chain), GET otherwise
+    const fetchPortfolio = trackedVaults.length > 0
+      ? fetch('/api/portfolio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
+        })
+      : fetch(`/api/portfolio?wallet=${walletAddress}`);
+
+    fetchPortfolio
       .then(r => r.json())
       .then(d => {
         const pos: Position[] = (d.positions || []).map((p: any, i: number) => ({
@@ -43,13 +54,13 @@ export default function PortfolioPage() {
           letter: (PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'V').charAt(0).toUpperCase(),
           protocolName: p.protocolName,
           chainId: p.chainId || 0,
-          // Vault metadata for withdrawal
           vaultAddress: p.vaultAddress || p.asset?.address || '',
           underlyingTokenAddress: p.underlyingTokenAddress || '',
           shareDecimals: p.asset?.decimals || 18,
           shareBalanceRaw: p.balanceNative || '0',
+          source: p.source || 'lifi',
         }));
-        setPositions(pos);
+        setPositions(pos.filter(p => p.current > 0.001));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -149,6 +160,9 @@ export default function PortfolioPage() {
                     <div style={{ fontSize: 10, color: '#888', marginTop: 1 }}>{p.token} &middot; {p.chain}</div>
                   </div>
                 </div>
+                {p.source === 'onchain' && (
+                  <Badge bg={COLORS.lavender + '20'} color={COLORS.lavender}>on-chain</Badge>
+                )}
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -182,19 +196,11 @@ export default function PortfolioPage() {
           open={showWithdraw}
           onClose={() => { setShowWithdraw(false); setWithdrawIdx(undefined); }}
           positions={positions.map(p => ({
-            name: p.name,
-            chain: p.chain,
-            chainId: p.chainId,
-            token: p.token,
-            vaultAddress: p.vaultAddress,
-            underlyingTokenAddress: p.underlyingTokenAddress,
-            shareDecimals: p.shareDecimals,
-            shareBalanceRaw: p.shareBalanceRaw,
-            current: p.current,
-            earned: 0,
-            apy: 0,
-            color: p.color,
-            letter: p.letter,
+            name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
+            vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
+            shareDecimals: p.shareDecimals, shareBalanceRaw: p.shareBalanceRaw,
+            current: p.current, earned: 0, apy: 0,
+            color: p.color, letter: p.letter,
           }))}
           preselected={withdrawIdx}
         />

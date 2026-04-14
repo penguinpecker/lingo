@@ -6,6 +6,7 @@ import { COLORS, RISK_TIERS, PROTOCOL_NAMES, CHAINS } from '@/constants/theme';
 import { VaultBadge, Badge, Button, StrategyBar } from '@/components/ui';
 import BottomSheet from './BottomSheet';
 import { executeDeposit, detectSourceChain } from '@/lib/wallet/transaction';
+import { trackDeposit } from '@/lib/wallet/deposit-tracker';
 import type { Strategy } from '@/lib/lifi/types';
 
 type Step = 'amount' | 'confirm' | 'detecting' | 'approving' | 'processing' | 'success' | 'error';
@@ -90,6 +91,24 @@ export default function DepositSheet({
       }
 
       setStep('success');
+
+      // Track vaults locally for instant portfolio display
+      for (let i = 0; i < strategy.allocations.length; i++) {
+        const alloc = strategy.allocations[i];
+        trackDeposit({
+          vaultAddress: alloc.vault.address,
+          chainId: alloc.vault.chainId,
+          network: alloc.vault.network,
+          protocol: alloc.vault.protocol,
+          token: alloc.vault.token,
+          tokenAddress: alloc.vault.tokenAddress,
+          tokenDecimals: alloc.vault.tokenDecimals,
+          shareDecimals: 18,
+          depositedAt: Date.now(),
+          depositAmount: numAmount * alloc.weight,
+          txHash: results[i]?.hash || '',
+        });
+      }
     } catch (e) {
       setErrorMsg((e as Error).message || 'Transaction failed');
       setStep('error');
