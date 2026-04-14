@@ -13,44 +13,32 @@ const ERC20_ABI = parseAbi([
   'function balanceOf(address) view returns (uint256)',
 ]);
 
+// ONLY scan Base + Arbitrum for source funds — no more dead RPC failures
 const STABLECOINS: Record<number, { symbol: string; address: string; decimals: number }[]> = {
   8453:   [{ symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 }],
   42161:  [{ symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 }],
-  1:      [{ symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 }],
-  10:     [{ symbol: 'USDC', address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 }],
-  137:    [{ symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 }],
-  56:     [{ symbol: 'USDC', address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 }],
-  43114:  [{ symbol: 'USDC', address: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E', decimals: 6 }],
-  100:    [{ symbol: 'USDC', address: '0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83', decimals: 6 }],
-  59144:  [{ symbol: 'USDC', address: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', decimals: 6 }],
-  534352: [{ symbol: 'USDC', address: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4', decimals: 6 }],
 };
 
 const EXPLORERS: Record<number, string> = {
-  1: 'https://etherscan.io', 8453: 'https://basescan.org',
-  42161: 'https://arbiscan.io', 10: 'https://optimistic.etherscan.io',
+  8453: 'https://basescan.org',
+  42161: 'https://arbiscan.io',
+  1: 'https://etherscan.io', 10: 'https://optimistic.etherscan.io',
   137: 'https://polygonscan.com', 56: 'https://bscscan.com',
-  43114: 'https://snowtrace.io', 100: 'https://gnosisscan.io',
-  59144: 'https://lineascan.build', 534352: 'https://scrollscan.com',
 };
 
 const GAS_COSTS: Record<number, number> = {
-  1: 5.0, 8453: 0.10, 42161: 0.15, 10: 0.12, 137: 0.05,
-  56: 0.10, 43114: 0.20, 100: 0.02, 59144: 0.15, 534352: 0.15,
+  8453: 0.10, 42161: 0.15,
 };
 
 const RPC_URLS: Record<number, string> = {
-  1: 'https://eth.llamarpc.com', 8453: 'https://mainnet.base.org',
-  42161: 'https://arb1.arbitrum.io/rpc', 10: 'https://mainnet.optimism.io',
-  137: 'https://polygon.llamarpc.com', 56: 'https://bsc-dataseed.binance.org',
-  43114: 'https://api.avax.network/ext/bc/C/rpc', 100: 'https://rpc.gnosischain.com',
-  59144: 'https://rpc.linea.build', 534352: 'https://rpc.scroll.io',
+  8453: 'https://mainnet.base.org',
+  42161: 'https://arb1.arbitrum.io/rpc',
 };
 
 function getPublicClient(chainId: number) {
   const chain = CHAIN_MAP[chainId] || base;
   const rpc = RPC_URLS[chainId];
-  return createPublicClient({ chain, transport: http(rpc, { timeout: 10000 }) });
+  return createPublicClient({ chain, transport: http(rpc || undefined, { timeout: 8000 }) });
 }
 
 // ─── Switch chain + send tx through Privy provider directly ───
