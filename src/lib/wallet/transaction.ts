@@ -141,10 +141,11 @@ async function ensureApproval(params: {
   return hash;
 }
 
-// ─── Detect best source chain ─────────────────────────────────
+// ─── Detect best source chain — prefers vault's chain to avoid bridging ───
 export async function detectSourceChain(
   walletAddress: string,
   requiredAmount: number,
+  preferChainId?: number,
 ): Promise<{ chainId: number; tokenAddress: string; tokenDecimals: number; balance: number } | null> {
   type ChainBalance = { chainId: number; tokenAddress: string; tokenDecimals: number; balance: number; gas: number };
   const results: ChainBalance[] = [];
@@ -172,6 +173,14 @@ export async function detectSourceChain(
   );
 
   if (results.length === 0) return null;
+
+  // ALWAYS prefer the vault's chain if user has enough there — avoids cross-chain failures
+  if (preferChainId) {
+    const sameChain = results.find(r => r.chainId === preferChainId);
+    if (sameChain) return sameChain;
+  }
+
+  // Otherwise pick cheapest gas
   results.sort((a, b) => a.gas - b.gas);
   return results[0];
 }
@@ -188,7 +197,7 @@ export async function executeDeposit(params: {
 }): Promise<{ hash: string; explorer: string; approvalHash?: string; bridged?: boolean }> {
   const { privyWallet, vaultAddress, vaultChainId, tokenAddress, tokenDecimals, amount, walletAddress } = params;
 
-  const source = await detectSourceChain(walletAddress, amount);
+  const source = await detectSourceChain(walletAddress, amount, vaultChainId);
   const fromChainId = source?.chainId ?? vaultChainId;
   const fromTokenAddress = source?.tokenAddress ?? tokenAddress;
   const fromTokenDecimals = source?.tokenDecimals ?? tokenDecimals;

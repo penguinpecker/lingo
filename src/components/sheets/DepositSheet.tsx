@@ -47,7 +47,8 @@ export default function DepositSheet({
     // Detect source chain before showing confirm
     setStep('detecting');
     try {
-      const source = await detectSourceChain(embeddedWallet.address, numAmount);
+      const preferChain = strategy?.allocations[0]?.vault.chainId;
+      const source = await detectSourceChain(embeddedWallet.address, numAmount, preferChain);
       if (source) {
         const chainName = CHAINS[source.chainId]?.name || `Chain ${source.chainId}`;
         setSourceChain(chainName);
