@@ -1,13 +1,11 @@
 import { createPublicClient, createWalletClient, custom, http, parseAbi, type WalletClient } from 'viem';
-import { base, arbitrum, mainnet, optimism, polygon, bsc } from 'viem/chains';
+import { base, arbitrum, mainnet, optimism, polygon, bsc, avalanche, gnosis, linea, scroll } from 'viem/chains';
 
+// All chains LI.FI Earn supports
 const CHAIN_MAP: Record<number, any> = {
-  1: mainnet,
-  8453: base,
-  42161: arbitrum,
-  10: optimism,
-  137: polygon,
-  56: bsc,
+  1: mainnet, 8453: base, 42161: arbitrum, 10: optimism,
+  137: polygon, 56: bsc, 43114: avalanche, 100: gnosis,
+  59144: linea, 534352: scroll,
 };
 
 const ERC20_ABI = parseAbi([
@@ -16,42 +14,60 @@ const ERC20_ABI = parseAbi([
   'function balanceOf(address) view returns (uint256)',
 ]);
 
-// Stablecoin addresses per chain for cross-chain source detection
+// Primary USDC address per chain — used for cross-chain source detection + withdrawal destination
 const STABLECOINS: Record<number, { symbol: string; address: string; decimals: number }[]> = {
-  8453:  [{ symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 }],
-  42161: [{ symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 }],
-  1:     [{ symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 }],
-  10:    [{ symbol: 'USDC', address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 }],
-  137:   [{ symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 }],
-  56:    [{ symbol: 'USDC', address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 }],
+  8453:   [{ symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 }],
+  42161:  [{ symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 }],
+  1:      [{ symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 }],
+  10:     [{ symbol: 'USDC', address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6 }],
+  137:    [{ symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 }],
+  56:     [{ symbol: 'USDC', address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 }],
+  43114:  [{ symbol: 'USDC', address: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E', decimals: 6 }],
+  100:    [{ symbol: 'USDC', address: '0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83', decimals: 6 }],
+  59144:  [{ symbol: 'USDC', address: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', decimals: 6 }],
+  534352: [{ symbol: 'USDC', address: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4', decimals: 6 }],
 };
 
 const EXPLORERS: Record<number, string> = {
-  1: 'https://etherscan.io',
-  8453: 'https://basescan.org',
-  42161: 'https://arbiscan.io',
-  10: 'https://optimistic.etherscan.io',
-  137: 'https://polygonscan.com',
-  56: 'https://bscscan.com',
+  1: 'https://etherscan.io', 8453: 'https://basescan.org',
+  42161: 'https://arbiscan.io', 10: 'https://optimistic.etherscan.io',
+  137: 'https://polygonscan.com', 56: 'https://bscscan.com',
+  43114: 'https://snowtrace.io', 100: 'https://gnosisscan.io',
+  59144: 'https://lineascan.build', 534352: 'https://scrollscan.com',
 };
 
-const GAS_COSTS: Record<number, number> = { 1: 5, 8453: 0.1, 42161: 0.15, 10: 0.12, 137: 0.05, 56: 0.1 };
+const GAS_COSTS: Record<number, number> = {
+  1: 5.0, 8453: 0.10, 42161: 0.15, 10: 0.12, 137: 0.05,
+  56: 0.10, 43114: 0.20, 100: 0.02, 59144: 0.15, 534352: 0.15,
+};
 
+const RPC_URLS: Record<number, string> = {
+  1: 'https://eth.llamarpc.com', 8453: 'https://mainnet.base.org',
+  42161: 'https://arb1.arbitrum.io/rpc', 10: 'https://mainnet.optimism.io',
+  137: 'https://polygon.llamarpc.com', 56: 'https://bsc-dataseed.binance.org',
+  43114: 'https://api.avax.network/ext/bc/C/rpc', 100: 'https://rpc.gnosischain.com',
+  59144: 'https://rpc.linea.build', 534352: 'https://rpc.scroll.io',
+};
+
+// ─── Privy-native chain switching ─────────────────────────────
 export async function getWalletClient(privyWallet: any, chainId: number): Promise<WalletClient> {
-  const provider = await privyWallet.getEthereumProvider();
   const chain = CHAIN_MAP[chainId] || base;
 
+  // Use Privy's native switchChain — raw provider method doesn't work for embedded wallets
   try {
-    await provider.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: `0x${chainId.toString(16)}` }],
-    });
-  } catch (switchError: any) {
-    if (switchError.code === 4902) {
-      console.warn('Chain not added:', chainId);
-    }
+    await privyWallet.switchChain(chainId);
+  } catch (e) {
+    console.warn('switchChain failed, trying provider fallback:', e);
+    try {
+      const provider = await privyWallet.getEthereumProvider();
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: `0x${chainId.toString(16)}` }],
+      });
+    } catch { /* proceed anyway */ }
   }
 
+  const provider = await privyWallet.getEthereumProvider();
   return createWalletClient({ chain, transport: custom(provider) });
 }
 
@@ -74,7 +90,7 @@ export async function sendTransaction(
   return hash;
 }
 
-// ─── Check & send ERC20 approval if needed ────────────────────
+// ─── ERC20 approval ───────────────────────────────────────────
 async function ensureApproval(params: {
   privyWallet: any;
   tokenAddress: string;
@@ -85,7 +101,8 @@ async function ensureApproval(params: {
 }): Promise<string | null> {
   const { privyWallet, tokenAddress, spenderAddress, amount, chainId, walletAddress } = params;
   const chain = CHAIN_MAP[chainId] || base;
-  const publicClient = createPublicClient({ chain, transport: http() });
+  const rpc = RPC_URLS[chainId];
+  const publicClient = createPublicClient({ chain, transport: http(rpc, { timeout: 10000 }) });
 
   const allowance = await publicClient.readContract({
     address: tokenAddress as `0x${string}`,
@@ -112,7 +129,7 @@ async function ensureApproval(params: {
   return hash;
 }
 
-// ─── Detect best source chain for user's stablecoins ──────────
+// ─── Detect best source chain — scans ALL 10 chains ──────────
 export async function detectSourceChain(
   walletAddress: string,
   requiredAmount: number,
@@ -125,7 +142,8 @@ export async function detectSourceChain(
       const chainId = parseInt(chainIdStr);
       const chain = CHAIN_MAP[chainId];
       if (!chain) return;
-      const client = createPublicClient({ chain, transport: http() });
+      const rpc = RPC_URLS[chainId];
+      const client = createPublicClient({ chain, transport: http(rpc, { timeout: 6000 }) });
 
       for (const token of tokens) {
         try {
@@ -139,12 +157,13 @@ export async function detectSourceChain(
           if (balance >= requiredAmount) {
             results.push({ chainId, tokenAddress: token.address, tokenDecimals: token.decimals, balance, gas: GAS_COSTS[chainId] ?? 0.3 });
           }
-        } catch { /* skip */ }
+        } catch { /* skip slow/dead RPCs */ }
       }
     })
   );
 
   if (results.length === 0) return null;
+  // Pick cheapest gas chain with sufficient balance
   results.sort((a, b) => a.gas - b.gas);
   return results[0];
 }
@@ -161,7 +180,6 @@ export async function executeDeposit(params: {
 }): Promise<{ hash: string; explorer: string; approvalHash?: string; bridged?: boolean }> {
   const { privyWallet, vaultAddress, vaultChainId, tokenAddress, tokenDecimals, amount, walletAddress } = params;
 
-  // Step 1: Detect which chain has the user's funds
   const source = await detectSourceChain(walletAddress, amount);
   const fromChainId = source?.chainId ?? vaultChainId;
   const fromTokenAddress = source?.tokenAddress ?? tokenAddress;
@@ -170,7 +188,6 @@ export async function executeDeposit(params: {
 
   const rawAmount = Math.floor(amount * (10 ** fromTokenDecimals)).toString();
 
-  // Step 2: Get quote from Composer (cross-chain if needed)
   const quoteRes = await fetch('/api/quote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -196,7 +213,6 @@ export async function executeDeposit(params: {
 
   if (!txReq) throw new Error('No transaction in quote response');
 
-  // Step 3: Approve ERC20 spend if needed
   let approvalHash: string | null = null;
   if (approvalAddress) {
     approvalHash = await ensureApproval({
@@ -209,7 +225,6 @@ export async function executeDeposit(params: {
     });
   }
 
-  // Step 4: Sign and send
   const hash = await sendTransaction(privyWallet, {
     to: txReq.to,
     data: txReq.data,
@@ -222,19 +237,18 @@ export async function executeDeposit(params: {
   return { hash, explorer, ...(approvalHash ? { approvalHash } : {}), bridged };
 }
 
-// ─── Execute withdraw: quote redeem → approve → sign ──────────
+// ─── Execute withdraw ─────────────────────────────────────────
 export async function executeWithdraw(params: {
   privyWallet: any;
   vaultAddress: string;
   vaultChainId: number;
   underlyingTokenAddress: string;
   shareDecimals: number;
-  amountShares: string; // raw share amount as string (from portfolio)
+  amountShares: string;
   walletAddress: string;
 }): Promise<{ hash: string; explorer: string }> {
   const { privyWallet, vaultAddress, vaultChainId, underlyingTokenAddress, shareDecimals, amountShares, walletAddress } = params;
 
-  // For withdrawal: fromToken = vault share token, toToken = underlying (USDC)
   const quoteRes = await fetch('/api/quote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -260,7 +274,6 @@ export async function executeWithdraw(params: {
 
   if (!txReq) throw new Error('No transaction in withdraw quote response');
 
-  // Approve vault shares spend if needed
   if (approvalAddress) {
     await ensureApproval({
       privyWallet,

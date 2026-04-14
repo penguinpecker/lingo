@@ -4,19 +4,15 @@ import { PrivyProvider } from '@privy-io/react-auth';
 import { WagmiProvider, createConfig } from '@privy-io/wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http } from 'viem';
-import { base, arbitrum, mainnet, optimism, polygon } from 'viem/chains';
+import { base, arbitrum, mainnet, optimism, polygon, bsc, avalanche, gnosis, linea, scroll } from 'viem/chains';
 import { ReactNode, useState, useEffect } from 'react';
 import { ToastProvider } from '@/components/Toast';
 
+const ALL_CHAINS = [base, arbitrum, mainnet, optimism, polygon, bsc, avalanche, gnosis, linea, scroll] as const;
+
 const wagmiConfig = createConfig({
-  chains: [base, arbitrum, mainnet, optimism, polygon],
-  transports: {
-    [base.id]: http(),
-    [arbitrum.id]: http(),
-    [mainnet.id]: http(),
-    [optimism.id]: http(),
-    [polygon.id]: http(),
-  },
+  chains: ALL_CHAINS,
+  transports: Object.fromEntries(ALL_CHAINS.map(c => [c.id, http()])),
 });
 
 const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || '';
@@ -55,7 +51,7 @@ export default function Providers({ children }: { children: ReactNode }) {
         loginMethods: ['email', 'google', 'apple'],
         embeddedWallets: { ethereum: { createOnLogin: 'users-without-wallets' } },
         defaultChain: base,
-        supportedChains: [base, arbitrum, mainnet, optimism, polygon],
+        supportedChains: [...ALL_CHAINS],
       }}
     >
       <QueryClientProvider client={queryClient}>
