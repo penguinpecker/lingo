@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createPublicClient, http, parseAbi, formatUnits } from 'viem';
-import { base, arbitrum, mainnet, optimism, polygon } from 'viem/chains';
+import { base, arbitrum, mainnet, optimism, polygon, bsc } from 'viem/chains';
 
 const ERC20_ABI = parseAbi([
   'function balanceOf(address) view returns (uint256)',
 ]);
 
-// USDC + USDT addresses per chain
 const TOKENS: Record<number, { symbol: string; address: `0x${string}`; decimals: number }[]> = {
   [base.id]: [
     { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
@@ -29,6 +28,10 @@ const TOKENS: Record<number, { symbol: string; address: `0x${string}`; decimals:
     { symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6 },
     { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', decimals: 6 },
   ],
+  [bsc.id]: [
+    { symbol: 'USDC', address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 },
+    { symbol: 'USDT', address: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
+  ],
 };
 
 const CHAINS = [
@@ -37,6 +40,7 @@ const CHAINS = [
   { chain: mainnet, name: 'Ethereum' },
   { chain: optimism, name: 'Optimism' },
   { chain: polygon, name: 'Polygon' },
+  { chain: bsc, name: 'BNB Chain' },
 ];
 
 export async function GET(request: NextRequest) {

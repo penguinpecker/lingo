@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { COLORS, RISK_TIERS, PROTOCOL_NAMES } from '@/constants/theme';
+import { COLORS, RISK_TIERS, PROTOCOL_NAMES, CHAINS } from '@/constants/theme';
 import { VaultBadge, Badge, Button, StrategyBar } from '@/components/ui';
 import BottomSheet from './BottomSheet';
-import { executeDeposit } from '@/lib/wallet/transaction';
+import { executeDeposit, detectSourceChain } from '@/lib/wallet/transaction';
 import type { Strategy } from '@/lib/lifi/types';
 
-type Step = 'amount' | 'confirm' | 'processing' | 'success' | 'error';
+type Step = 'amount' | 'confirm' | 'detecting' | 'approving' | 'processing' | 'success' | 'error';
 
 export default function DepositSheet({
   open,
@@ -23,8 +23,9 @@ export default function DepositSheet({
   const [step, setStep] = useState<Step>('amount');
   const [amount, setAmount] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [txHashes, setTxHashes] = useState<{ hash: string; explorer: string }[]>([]);
+  const [txHashes, setTxHashes] = useState<{ hash: string; explorer: string; bridged?: boolean }[]>([]);
   const [currentVaultIdx, setCurrentVaultIdx] = useState(0);
+  const [sourceChain, setSourceChain] = useState<string | null>(null);
 
   const numAmount = parseFloat(amount) || 0;
   const tier = strategy ? RISK_TIERS[strategy.tier] : RISK_TIERS[0];
@@ -36,21 +37,42 @@ export default function DepositSheet({
     setErrorMsg('');
     setTxHashes([]);
     setCurrentVaultIdx(0);
+    setSourceChain(null);
     onClose();
+  };
+
+  const handleNext = async () => {
+    if (!embeddedWallet) return;
+    // Detect source chain before showing confirm
+    setStep('detecting');
+    try {
+      const source = await detectSourceChain(embeddedWallet.address, numAmount);
+      if (source) {
+        const chainName = CHAINS[source.chainId]?.name || `Chain ${source.chainId}`;
+        setSourceChain(chainName);
+      } else {
+        setSourceChain(null);
+      }
+      setStep('confirm');
+    } catch {
+      setStep('confirm');
+    }
   };
 
   const handleConfirm = async () => {
     if (!strategy || !embeddedWallet) return;
-    setStep('processing');
+    setStep('approving');
     setTxHashes([]);
 
     try {
-      const results: { hash: string; explorer: string }[] = [];
+      const results: { hash: string; explorer: string; bridged?: boolean }[] = [];
 
       for (let i = 0; i < strategy.allocations.length; i++) {
         setCurrentVaultIdx(i);
         const alloc = strategy.allocations[i];
         const depositAmount = numAmount * alloc.weight;
+
+        setStep('approving');
 
         const result = await executeDeposit({
           privyWallet: embeddedWallet,
@@ -62,6 +84,7 @@ export default function DepositSheet({
           walletAddress: embeddedWallet.address,
         });
 
+        setStep('processing');
         results.push(result);
         setTxHashes([...results]);
       }
@@ -126,14 +149,36 @@ export default function DepositSheet({
             </div>
           )}
 
-          <Button onClick={() => setStep('confirm')} disabled={numAmount <= 0}>Next</Button>
+          <Button onClick={handleNext} disabled={numAmount <= 0}>Next</Button>
         </>
+      )}
+
+      {/* STEP: Detecting source chain */}
+      {step === 'detecting' && (
+        <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <div className="spinner" style={{ margin: '0 auto 20px' }} />
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Scanning your balances...</div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Finding the cheapest route</div>
+        </div>
       )}
 
       {/* STEP: Confirm */}
       {step === 'confirm' && strategy && (
         <>
           <div style={{ fontWeight: 900, fontSize: 18, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 20 }}>Confirm deposit</div>
+
+          {/* Cross-chain info banner */}
+          {sourceChain && (
+            <div style={{
+              background: '#EEF2FF', border: `1.5px solid ${COLORS.lavender}`, borderRadius: 12,
+              padding: '10px 14px', marginBottom: 16, fontSize: 11, color: COLORS.lavenderDark, fontWeight: 600,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none"><path d="M4 12H20M20 12L14 6M20 12L14 18" stroke={COLORS.lavender} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Funds detected on {sourceChain}. Lingo will auto-bridge to the cheapest vault chain.
+            </div>
+          )}
+
           <div style={{ background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
             {[
               ['Amount', `$${numAmount.toLocaleString()}`],
@@ -176,6 +221,43 @@ export default function DepositSheet({
             <Button onClick={handleConfirm} disabled={!embeddedWallet} style={{ flex: 2 }}>Confirm &amp; sign</Button>
           </div>
         </>
+      )}
+
+      {/* STEP: Approving */}
+      {step === 'approving' && strategy && (
+        <div style={{ textAlign: 'center', padding: '30px 20px' }}>
+          <div className="spinner" style={{ margin: '0 auto 20px' }} />
+          <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 8 }}>
+            Approving &amp; depositing into vault {currentVaultIdx + 1}/{strategy.allocations.length}...
+          </div>
+          <div style={{ fontSize: 12, color: '#888' }}>Confirm each transaction in your wallet</div>
+          {strategy.allocations.map((a, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', marginTop: i === 0 ? 16 : 0,
+              opacity: i < currentVaultIdx ? 0.5 : i === currentVaultIdx ? 1 : 0.3,
+            }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: 6,
+                background: i < currentVaultIdx ? COLORS.success : i === currentVaultIdx ? COLORS.orange : COLORS.lightGray,
+                border: `1.5px solid ${COLORS.black}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {i < currentVaultIdx ? (
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 6L5 8L9 4" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                ) : i === currentVaultIdx ? (
+                  <div style={{ width: 6, height: 6, borderRadius: 3, background: COLORS.black }} />
+                ) : null}
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>{PROTOCOL_NAMES[a.vault.protocol] || a.vault.protocol}</span>
+              <span style={{ fontSize: 10, color: '#888' }}>${(numAmount * a.weight).toFixed(0)}</span>
+            </div>
+          ))}
+          {txHashes.length > 0 && (
+            <div style={{ marginTop: 12, fontSize: 10, color: '#888' }}>
+              {txHashes.length}/{strategy.allocations.length} confirmed
+            </div>
+          )}
+        </div>
       )}
 
       {/* STEP: Processing */}
@@ -228,13 +310,20 @@ export default function DepositSheet({
           <div style={{ fontSize: 13, color: '#666', marginBottom: 4 }}>${numAmount.toLocaleString()} into {strategy?.name}</div>
           <div style={{ fontSize: 12, color: COLORS.success, fontWeight: 700, marginBottom: 16 }}>Earning {strategy?.netApy}% yearly</div>
 
+          {txHashes.some(t => t.bridged) && (
+            <div style={{ fontSize: 10, color: COLORS.lavender, fontWeight: 700, marginBottom: 8 }}>
+              Cross-chain bridge executed automatically
+            </div>
+          )}
+
           {txHashes.length > 0 && (
             <div style={{ marginBottom: 20 }}>
               {txHashes.map((tx, i) => (
                 <a key={i} href={tx.explorer} target="_blank" rel="noopener noreferrer"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: 11, color: COLORS.info, marginBottom: 4, textDecoration: 'none' }}>
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, fontSize: 11, color: '#3B82F6', marginBottom: 4, textDecoration: 'none' }}>
                   Tx {i + 1}: {tx.hash.slice(0, 10)}...{tx.hash.slice(-6)}
-                  <svg width={10} height={10} viewBox="0 0 12 12" fill="none"><path d="M3 9L9 3M9 3H5M9 3V7" stroke={COLORS.info} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  {tx.bridged && <Badge bg={COLORS.lavender + '30'} color={COLORS.lavender}>bridged</Badge>}
+                  <svg width={10} height={10} viewBox="0 0 12 12" fill="none"><path d="M3 9L9 3M9 3H5M9 3V7" stroke="#3B82F6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </a>
               ))}
             </div>

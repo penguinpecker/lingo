@@ -12,6 +12,11 @@ interface Position {
   name: string; chain: string; token: string;
   current: number; color: string; letter: string;
   protocolName: string; chainId: number;
+  // Fields needed for real withdrawal
+  vaultAddress: string;
+  underlyingTokenAddress: string;
+  shareDecimals: number;
+  shareBalanceRaw: string;
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender, COLORS.orange];
@@ -38,6 +43,11 @@ export default function PortfolioPage() {
           letter: (PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'V').charAt(0).toUpperCase(),
           protocolName: p.protocolName,
           chainId: p.chainId || 0,
+          // Vault metadata for withdrawal
+          vaultAddress: p.vaultAddress || p.asset?.address || '',
+          underlyingTokenAddress: p.underlyingTokenAddress || '',
+          shareDecimals: p.asset?.decimals || 18,
+          shareBalanceRaw: p.balanceNative || '0',
         }));
         setPositions(pos);
       })
@@ -172,9 +182,19 @@ export default function PortfolioPage() {
           open={showWithdraw}
           onClose={() => { setShowWithdraw(false); setWithdrawIdx(undefined); }}
           positions={positions.map(p => ({
-            name: p.name, chain: p.chain, token: p.token,
-            current: p.current, earned: 0, apy: 0,
-            color: p.color, letter: p.letter,
+            name: p.name,
+            chain: p.chain,
+            chainId: p.chainId,
+            token: p.token,
+            vaultAddress: p.vaultAddress,
+            underlyingTokenAddress: p.underlyingTokenAddress,
+            shareDecimals: p.shareDecimals,
+            shareBalanceRaw: p.shareBalanceRaw,
+            current: p.current,
+            earned: 0,
+            apy: 0,
+            color: p.color,
+            letter: p.letter,
           }))}
           preselected={withdrawIdx}
         />
