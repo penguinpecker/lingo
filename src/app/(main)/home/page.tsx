@@ -12,7 +12,9 @@ interface Balance { chain: string; symbol: string; amount: number }
 interface Position {
   name: string; chain: string; token: string; deposited: number;
   current: number; apy: number; color: string; letter: string;
-  protocolName: string;
+  protocolName: string; chainId: number;
+  vaultAddress: string; underlyingTokenAddress: string;
+  shareDecimals: number; shareBalanceRaw: string;
 }
 
 function DepositIcon({ size = 14, color = COLORS.orange }: { size?: number; color?: string }) {
@@ -70,6 +72,11 @@ export default function HomePage() {
           color: TIER_COLORS[i % TIER_COLORS.length],
           letter: (PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'V').charAt(0).toUpperCase(),
           protocolName: p.protocolName,
+          chainId: p.chainId || 0,
+          vaultAddress: p.vaultAddress || p.asset?.address || '',
+          underlyingTokenAddress: p.underlyingTokenAddress || '',
+          shareDecimals: p.asset?.decimals || 18,
+          shareBalanceRaw: p.balanceNative || '0',
         }));
         setPositions(pos);
       })
@@ -124,7 +131,7 @@ export default function HomePage() {
               </div>
             ))
           ) : (
-            <div style={{ fontSize: 11, color: '#555' }}>No stablecoins found. Fund your wallet to start earning.</div>
+            <div style={{ fontSize: 11, color: '#555' }}>No stablecoins found. Fund your wallet with USDC or USDT on any supported chain to start earning.</div>
           )}
         </div>
       </div>
@@ -198,7 +205,9 @@ export default function HomePage() {
           open={showWithdraw}
           onClose={() => setShowWithdraw(false)}
           positions={positions.map(p => ({
-            name: p.name, chain: p.chain, token: p.token,
+            name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
+            vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
+            shareDecimals: p.shareDecimals, shareBalanceRaw: p.shareBalanceRaw,
             current: p.current, earned: 0, apy: 0,
             color: p.color, letter: p.letter,
           }))}
