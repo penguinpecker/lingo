@@ -140,6 +140,21 @@ export async function GET(request: NextRequest) {
     if (r.status === 'fulfilled' && r.value) positions.push(...r.value);
   }
 
+  // RPC fallback for known vault tokens when Blockscout misses them
+  const knownVaults = [
+    { chainId: 8453, addr: '0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61', name: 'Gauntlet USDC Prime', sym: 'gtUSDCp', dec: 18 },
+    { chainId: 137, addr: '0x6ab707Aca953eDAeFBc4fD23bA73294241490620', name: 'Aave v3 USDT', sym: 'AUSDT', dec: 6 },
+  ];
+  const foundAddrs = new Set(positions.map(p => `${p.vaultAddress.toLowerCase()}-${p.chainId}`));
+  const rpcResults = await Promise.allSettled(
+    knownVaults
+      .filter(v => !foundAddrs.has(`${v.addr.toLowerCase()}-${v.chainId}`))
+      .map(v => withTimeout(checkVaultRPC(wallet, v.chainId, v.addr, v.name, v.sym, v.dec, 0), 8000))
+  );
+  for (const r of rpcResults) {
+    if (r.status === 'fulfilled' && r.value) positions.push(r.value);
+  }
+
   // Dedupe
   const seen = new Set<string>();
   const deduped = positions.filter(p => {
