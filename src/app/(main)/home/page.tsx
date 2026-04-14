@@ -1,29 +1,23 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState } from 'react';
-import { COLORS, PROTOCOL_NAMES } from '@/constants/theme';
-import { SectionLabel, ProgressRing, Sparkline, Card, Button } from '@/components/ui';
+import { useEffect, useState, useCallback } from 'react';
+import { COLORS, PROTOCOL_NAMES, RISK_TIERS } from '@/constants/theme';
+import { SectionLabel, Card, Button, Badge } from '@/components/ui';
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
 import { getTrackedVaults, type TrackedVault } from '@/lib/wallet/deposit-tracker';
+import type { Strategy } from '@/lib/lifi/types';
 
 interface Balance { chain: string; symbol: string; amount: number }
 interface Position {
   name: string; chain: string; token: string; deposited: number;
-  current: number; apy: number; color: string; letter: string;
+  current: number; color: string; letter: string;
   protocolName: string; chainId: number;
   vaultAddress: string; underlyingTokenAddress: string;
   shareDecimals: number; shareBalanceRaw: string;
   status: string;
-}
-
-function DepositIcon({ size = 14, color = COLORS.orange }: { size?: number; color?: string }) {
-  return <svg width={size} height={size} viewBox="0 0 20 20" fill="none"><path d="M10 3V14M10 14L6 10M10 14L14 10" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M4 17H16" stroke={color} strokeWidth="2" strokeLinecap="round" /></svg>;
-}
-function YieldIcon({ size = 14, color = COLORS.success }: { size?: number; color?: string }) {
-  return <svg width={size} height={size} viewBox="0 0 20 20" fill="none"><path d="M10 17V6M10 6L6 10M10 6L14 10" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M4 3H16" stroke={color} strokeWidth="2" strokeLinecap="round" /></svg>;
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender];
@@ -36,19 +30,12 @@ function trackedToPositions(vaults: TrackedVault[]): Position[] {
   return vaults.map((v, i) => ({
     name: PROTOCOL_NAMES[v.protocol] || v.protocol || 'Vault',
     chain: CHAIN_NAMES[v.chainId] || v.network || 'Unknown',
-    token: v.token || 'USDC',
-    deposited: v.depositAmount || 0,
-    current: v.depositAmount || 0,
-    apy: 0,
-    color: TIER_COLORS[i % TIER_COLORS.length],
+    token: v.token || 'USDC', deposited: v.depositAmount || 0,
+    current: v.depositAmount || 0, color: TIER_COLORS[i % TIER_COLORS.length],
     letter: (v.protocol || 'V').charAt(0).toUpperCase(),
-    protocolName: v.protocol || '',
-    chainId: v.chainId,
-    vaultAddress: v.vaultAddress,
-    underlyingTokenAddress: v.tokenAddress || '',
-    shareDecimals: v.shareDecimals || 18,
-    shareBalanceRaw: '0',
-    status: 'pending',
+    protocolName: v.protocol || '', chainId: v.chainId,
+    vaultAddress: v.vaultAddress, underlyingTokenAddress: v.tokenAddress || '',
+    shareDecimals: v.shareDecimals || 18, shareBalanceRaw: '0', status: 'pending',
   }));
 }
 
@@ -60,8 +47,9 @@ export default function HomePage() {
   const [totalBalance, setTotalBalance] = useState(0);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loadingBal, setLoadingBal] = useState(true);
-  const [loadingPos, setLoadingPos] = useState(true);
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [strategies, setStrategies] = useState<{ safe: Strategy | null; mix: Strategy | null; bold: Strategy | null }>({ safe: null, mix: null, bold: null });
+  const [vaultCount, setVaultCount] = useState(0);
 
   // Show tracked deposits immediately
   useEffect(() => {
@@ -69,7 +57,7 @@ export default function HomePage() {
     if (tracked.length > 0) setPositions(trackedToPositions(tracked));
   }, []);
 
-  // Fetch live balances
+  // Fetch balances
   useEffect(() => {
     if (!walletAddress) { setLoadingBal(false); return; }
     fetch(`/api/balances?wallet=${walletAddress}`)
@@ -88,11 +76,10 @@ export default function HomePage() {
       .finally(() => setLoadingBal(false));
   }, [walletAddress]);
 
-  // Fetch live positions in background
+  // Fetch positions in background
   useEffect(() => {
-    if (!walletAddress) { setLoadingPos(false); return; }
+    if (!walletAddress) return;
     const tracked = getTrackedVaults();
-
     fetch('/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -100,150 +87,221 @@ export default function HomePage() {
     })
       .then(r => r.json())
       .then(d => {
-        const live = (d.positions || [])
-          .filter((p: any) => parseFloat(p.balanceUsd || '0') > 0.001)
-          .map((p: any, i: number) => ({
-            name: p.protocolName || p.asset?.name || 'Vault',
-            chain: p.chainName || 'Unknown',
-            token: p.asset?.symbol || '?',
-            deposited: parseFloat(p.balanceUsd || '0'),
-            current: parseFloat(p.balanceUsd || '0'),
-            apy: 0,
-            color: TIER_COLORS[i % TIER_COLORS.length],
-            letter: (p.protocolName || 'V').charAt(0).toUpperCase(),
-            protocolName: p.protocolName || '',
-            chainId: p.chainId || 0,
-            vaultAddress: p.vaultAddress || '',
-            underlyingTokenAddress: p.underlyingTokenAddress || '',
-            shareDecimals: p.asset?.decimals || 18,
-            shareBalanceRaw: p.balanceNative || '0',
-            status: p.status || 'live',
-          }));
-
+        const live = (d.positions || []).filter((p: any) => parseFloat(p.balanceUsd || '0') > 0.001).map((p: any, i: number) => ({
+          name: p.protocolName || p.asset?.name || 'Vault',
+          chain: p.chainName || 'Unknown', token: p.asset?.symbol || '?',
+          deposited: parseFloat(p.balanceUsd || '0'), current: parseFloat(p.balanceUsd || '0'),
+          color: TIER_COLORS[i % TIER_COLORS.length], letter: (p.protocolName || 'V').charAt(0).toUpperCase(),
+          protocolName: p.protocolName || '', chainId: p.chainId || 0,
+          vaultAddress: p.vaultAddress || '', underlyingTokenAddress: p.underlyingTokenAddress || '',
+          shareDecimals: p.asset?.decimals || 18, shareBalanceRaw: p.balanceNative || '0',
+          status: p.status || 'live',
+        }));
         if (live.length > 0) {
           const liveKeys = new Set(live.map((p: Position) => `${p.vaultAddress.toLowerCase()}-${p.chainId}`));
-          const unmatched = trackedToPositions(tracked).filter(
-            p => !liveKeys.has(`${p.vaultAddress.toLowerCase()}-${p.chainId}`)
-          );
+          const unmatched = trackedToPositions(tracked).filter(p => !liveKeys.has(`${p.vaultAddress.toLowerCase()}-${p.chainId}`));
           setPositions([...live, ...unmatched]);
         }
-      })
-      .catch(() => {})
-      .finally(() => setLoadingPos(false));
+      }).catch(() => {});
   }, [walletAddress]);
+
+  // Fetch strategy stats for the hero
+  useEffect(() => {
+    fetch('/api/vaults?deposit=1000')
+      .then(r => r.json())
+      .then(d => {
+        setStrategies(d.strategies || { safe: null, mix: null, bold: null });
+        setVaultCount(d.vaultCount || 0);
+      }).catch(() => {});
+  }, []);
 
   const totalPositionValue = positions.reduce((s, p) => s + p.current, 0);
   const displayTotal = totalBalance + totalPositionValue;
+  const topApy = Math.max(strategies.safe?.netApy || 0, strategies.mix?.netApy || 0, strategies.bold?.netApy || 0);
 
   return (
-    <div style={{ padding: 16 }}>
-      {/* Balance card */}
+    <div style={{ padding: 0 }}>
+      {/* HERO SECTION */}
       <div style={{
-        background: COLORS.black, borderRadius: 16, padding: 20, marginBottom: 16,
-        border: `2px solid ${COLORS.black}`, position: 'relative', overflow: 'hidden',
+        background: COLORS.black, padding: '24px 16px 20px', position: 'relative', overflow: 'hidden',
       }}>
-        <div style={{ position: 'absolute', top: -40, right: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(242,111,33,0.06)' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ fontSize: 9, color: '#666', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.2 }}>Total balance</div>
-            {loadingBal ? (
-              <div className="skeleton" style={{ width: 140, height: 34, marginTop: 4 }} />
-            ) : (
-              <div style={{ fontSize: 34, fontWeight: 900, color: COLORS.white, lineHeight: 1, marginTop: 4 }}>
-                ${displayTotal.toFixed(2)}
+        <div style={{ position: 'absolute', top: -60, right: -60, width: 180, height: 180, borderRadius: '50%', background: COLORS.orange, opacity: 0.08 }} />
+        <div style={{ position: 'absolute', bottom: -40, left: -40, width: 120, height: 120, borderRadius: '50%', background: COLORS.lavender, opacity: 0.06 }} />
+
+        <div style={{ fontSize: 28, fontWeight: 900, color: COLORS.white, textTransform: 'uppercase', letterSpacing: 1.5, lineHeight: 1.15 }}>
+          The Smartest<br />Savings in<br /><span style={{ color: COLORS.orange }}>DeFi</span>
+        </div>
+        <div style={{ fontSize: 12, color: '#888', marginTop: 8, lineHeight: 1.5 }}>
+          Chat in your language. AI builds your strategy.<br />
+          Earn up to {topApy > 0 ? `${topApy}%` : '...'} APY across {vaultCount || '600+'}  vaults.
+        </div>
+
+        {/* Stats badges */}
+        <div style={{ display: 'flex', gap: 6, marginTop: 16 }}>
+          {strategies.safe && (
+            <div style={{ padding: '6px 12px', borderRadius: 100, border: `1.5px solid ${COLORS.success}40`, background: COLORS.success + '15' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: COLORS.success }}>{strategies.safe.netApy}%</span>
+              <span style={{ fontSize: 9, color: '#888', marginLeft: 4 }}>Safe APY</span>
+            </div>
+          )}
+          {vaultCount > 0 && (
+            <div style={{ padding: '6px 12px', borderRadius: 100, border: `1.5px solid ${COLORS.orange}40`, background: COLORS.orange + '15' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: COLORS.orange }}>{vaultCount}+</span>
+              <span style={{ fontSize: 9, color: '#888', marginLeft: 4 }}>Vaults</span>
+            </div>
+          )}
+          <div style={{ padding: '6px 12px', borderRadius: 100, border: `1.5px solid ${COLORS.lavender}40`, background: COLORS.lavender + '15' }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: COLORS.lavender }}>6</span>
+            <span style={{ fontSize: 9, color: '#888', marginLeft: 4 }}>Languages</span>
+          </div>
+        </div>
+
+        {/* Balance card */}
+        <div style={{
+          background: '#1a1a1a', borderRadius: 14, padding: 16, marginTop: 16,
+          border: `1.5px solid #333`,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: 8, color: '#555', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>Your balance</div>
+              {loadingBal ? (
+                <div className="skeleton" style={{ width: 120, height: 28, marginTop: 4 }} />
+              ) : (
+                <div style={{ fontSize: 28, fontWeight: 900, color: COLORS.white, lineHeight: 1, marginTop: 4 }}>${displayTotal.toFixed(2)}</div>
+              )}
+            </div>
+            {totalPositionValue > 0 && (
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 8, color: '#555', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>Earning</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: COLORS.success, marginTop: 4 }}>${totalPositionValue.toFixed(2)}</div>
               </div>
             )}
           </div>
-          {totalPositionValue > 0 && (
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 9, color: '#666', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1.2 }}>Earning</div>
-              <div style={{ fontSize: 18, fontWeight: 900, color: COLORS.success, marginTop: 4 }}>${totalPositionValue.toFixed(2)}</div>
-            </div>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', gap: 16, marginTop: 16, flexWrap: 'wrap' }}>
-          {loadingBal ? (
-            <>
-              <div className="skeleton" style={{ width: 60, height: 28 }} />
-              <div className="skeleton" style={{ width: 60, height: 28 }} />
-            </>
-          ) : balances.length > 0 ? (
-            balances.map((b, i) => (
-              <div key={i}>
-                <div style={{ fontSize: 8, color: '#555', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>
-                  {b.symbol} <span style={{ color: '#444' }}>({b.chain})</span>
+          {balances.length > 0 && (
+            <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+              {balances.map((b, i) => (
+                <div key={i}>
+                  <span style={{ fontSize: 8, color: '#555', textTransform: 'uppercase', fontWeight: 700 }}>{b.symbol} ({b.chain})</span>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: COLORS.white }}>{b.amount.toFixed(2)}</div>
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: COLORS.white }}>{b.amount.toFixed(2)}</div>
-              </div>
-            ))
-          ) : (
-            <div style={{ fontSize: 11, color: '#555' }}>No stablecoins found. Fund your wallet to start earning.</div>
+              ))}
+            </div>
           )}
         </div>
       </div>
 
-      {/* Quick actions */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-        <Button onClick={() => router.push('/earn')} style={{ flex: 1, padding: '10px 0', fontSize: 11 }}>
-          <DepositIcon size={12} color={COLORS.black} /> Deposit
-        </Button>
-        <Button onClick={() => positions.length > 0 ? setShowWithdraw(true) : router.push('/earn')} variant="outline" style={{ flex: 1, padding: '10px 0', fontSize: 11 }}>
-          <YieldIcon size={12} /> Withdraw
-        </Button>
-        <Button onClick={() => router.push('/chat')} variant="secondary" style={{ flex: 1, padding: '10px 0', fontSize: 11, color: COLORS.lavenderLight }}>
-          <svg width={12} height={12} viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="13" rx="3" stroke={COLORS.lavenderLight} strokeWidth="2" /><path d="M8 21L12 17H3" stroke={COLORS.lavenderLight} strokeWidth="2" strokeLinejoin="round" /></svg>
-          Chat
-        </Button>
-      </div>
+      <div style={{ padding: '0 16px' }}>
+        {/* Quick actions */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 16, marginBottom: 4 }}>
+          <Button onClick={() => router.push('/earn')} style={{ flex: 1, padding: '12px 0', fontSize: 12 }}>Deposit &amp; Earn</Button>
+          <Button onClick={() => router.push('/chat')} variant="outline" style={{ flex: 1, padding: '12px 0', fontSize: 12 }}>Chat with AI</Button>
+        </div>
 
-      {/* Positions */}
-      <SectionLabel icon={<svg width={12} height={12} viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="#888" strokeWidth="2" /><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="#888" strokeWidth="2" /><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="#888" strokeWidth="2" /><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="#888" strokeWidth="2" /></svg>}>
-        Active positions
-      </SectionLabel>
-
-      {positions.length === 0 && !loadingPos ? (
-        <Card variant="outlined" style={{ textAlign: 'center', padding: 32 }}>
-          <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4 }}>No active positions</div>
-          <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
-            {totalBalance > 0
-              ? "You have funds ready. Let's put them to work earning yield."
-              : "Fund your wallet with USDC or USDT on any supported chain to start earning."}
-          </div>
-          <Button onClick={() => router.push('/earn')} style={{ maxWidth: 200, margin: '0 auto' }}>
-            {totalBalance > 0 ? 'Start earning' : 'How to fund'}
-          </Button>
-        </Card>
-      ) : (
-        positions.map((p, i) => (
-          <div key={i} style={{
-            background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 12,
-            padding: 14, marginBottom: 8, boxShadow: '2px 2px 0 #080808', cursor: 'pointer',
-            opacity: p.status === 'pending' ? 0.85 : 1,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 32, height: 32, borderRadius: 8, background: p.color,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontWeight: 900, fontSize: 14, color: COLORS.black,
-                  border: `1.5px solid ${COLORS.black}`,
-                }}>{p.letter}</div>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: 13 }}>{p.name}</div>
-                  <div style={{ fontSize: 10, color: '#888' }}>{p.token} &middot; {p.chain}</div>
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 900, fontSize: 15 }}>${p.current.toFixed(2)}</div>
-                {p.status === 'pending' && <div style={{ fontSize: 9, color: COLORS.warning, fontWeight: 700 }}>Bridging...</div>}
+        {/* HOW IT WORKS */}
+        <div style={{ marginTop: 20 }}>
+          <SectionLabel>How it works</SectionLabel>
+          {[
+            { num: '1', title: 'Chat in your language', desc: 'Say "save 500 dollars safely" in Hindi, English, or 4 other languages.' },
+            { num: '2', title: 'AI builds your strategy', desc: '7-signal scoring across 600+ vaults. Sharpe-ratio portfolio optimization.' },
+            { num: '3', title: 'Deposit & earn', desc: 'One tap deposits. Auto-bridges across chains for cheapest gas.' },
+            { num: '4', title: 'Withdraw anytime', desc: 'Your keys, your money. Instant redeem from any vault.' },
+          ].map((step, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 12,
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: 8, background: COLORS.orange,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 900, fontSize: 13, color: COLORS.black, flexShrink: 0,
+                border: `1.5px solid ${COLORS.black}`,
+              }}>{step.num}</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 13 }}>{step.title}</div>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 2, lineHeight: 1.4 }}>{step.desc}</div>
               </div>
             </div>
-          </div>
-        ))
-      )}
+          ))}
+        </div>
 
-      {/* Withdraw sheet */}
+        {/* STRATEGY OVERVIEW */}
+        {(strategies.safe || strategies.mix || strategies.bold) && (
+          <div style={{ marginTop: 16 }}>
+            <SectionLabel>Live strategies</SectionLabel>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[
+                { s: strategies.safe, t: RISK_TIERS[0] },
+                { s: strategies.mix, t: RISK_TIERS[1] },
+                { s: strategies.bold, t: RISK_TIERS[2] },
+              ].map(({ s, t }, i) => s && (
+                <div key={i} onClick={() => router.push('/earn')} style={{
+                  flex: 1, borderRadius: 12, padding: 12, textAlign: 'center', cursor: 'pointer',
+                  background: COLORS.white, border: `2px solid ${COLORS.black}`, boxShadow: `2px 2px 0 ${t.color}`,
+                }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: t.color }}>{s.netApy}%</div>
+                  <div style={{ fontSize: 8, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 2 }}>{t.label}</div>
+                  <div style={{ fontSize: 9, color: '#aaa', marginTop: 2 }}>{s.allocations.length} vaults</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ACTIVE POSITIONS */}
+        {positions.length > 0 && (
+          <div style={{ marginTop: 20 }}>
+            <SectionLabel>Active positions</SectionLabel>
+            {positions.map((p, i) => (
+              <div key={i} style={{
+                background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 12,
+                padding: 14, marginBottom: 8, boxShadow: '2px 2px 0 #080808',
+                opacity: p.status === 'pending' ? 0.85 : 1,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: 8, background: p.color,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 900, fontSize: 14, color: COLORS.black, border: `1.5px solid ${COLORS.black}`,
+                    }}>{p.letter}</div>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 13 }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: '#888' }}>{p.token} &middot; {p.chain}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 900, fontSize: 15 }}>${p.current.toFixed(2)}</div>
+                    {p.status === 'pending' && <div style={{ fontSize: 9, color: COLORS.warning, fontWeight: 700 }}>Bridging...</div>}
+                    {p.status === 'live' && <div style={{ fontSize: 9, color: COLORS.success, fontWeight: 700 }}>Live</div>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* WHY LINGO */}
+        <div style={{ marginTop: 20, marginBottom: 24 }}>
+          <SectionLabel>Why Lingo</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {[
+              { icon: '🔑', title: 'Your Keys', desc: 'Non-custodial. Embedded wallet via Privy.' },
+              { icon: '🤖', title: 'AI Optimized', desc: 'Multi-vault strategies for your risk profile.' },
+              { icon: '⛽', title: 'Gas Aware', desc: 'Auto-picks cheapest chain. Avoids mainnet.' },
+              { icon: '🌍', title: '6 Languages', desc: 'Chat in Hindi, Spanish, Portuguese & more.' },
+            ].map((item, i) => (
+              <div key={i} style={{
+                background: COLORS.lightGray, borderRadius: 12, padding: 14,
+                border: `1.5px solid ${COLORS.gray}`,
+              }}>
+                <div style={{ fontSize: 20, marginBottom: 6 }}>{item.icon}</div>
+                <div style={{ fontWeight: 800, fontSize: 12, marginBottom: 2 }}>{item.title}</div>
+                <div style={{ fontSize: 10, color: '#888', lineHeight: 1.4 }}>{item.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {positions.length > 0 && (
         <WithdrawSheet
           open={showWithdraw}
@@ -252,8 +310,7 @@ export default function HomePage() {
             name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
             vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
             shareDecimals: p.shareDecimals, shareBalanceRaw: p.shareBalanceRaw,
-            current: p.current, earned: 0, apy: 0,
-            color: p.color, letter: p.letter,
+            current: p.current, earned: 0, apy: 0, color: p.color, letter: p.letter,
           }))}
         />
       )}
