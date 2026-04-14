@@ -58,7 +58,7 @@ function getPublicClient(chainId: number) {
 async function privySendTx(
   privyWallet: any,
   chainId: number,
-  tx: { to: string; data: string; value?: string }
+  tx: { to: string; data: string; value?: string; gasLimit?: string }
 ): Promise<string> {
   // Switch chain via Privy
   try {
@@ -79,15 +79,33 @@ async function privySendTx(
 
   const provider = await privyWallet.getEthereumProvider();
 
-  // Send through provider directly — no viem chain validation
+  // Build tx params
+  const txParams: Record<string, string> = {
+    from: privyWallet.address,
+    to: tx.to,
+    data: tx.data,
+    value: tx.value || '0x0',
+  };
+
+  // Gas limit from Composer quote or estimate
+  if (tx.gasLimit) {
+    txParams.gas = tx.gasLimit.startsWith('0x') ? tx.gasLimit : `0x${parseInt(tx.gasLimit).toString(16)}`;
+  } else {
+    try {
+      const est = await provider.request({
+        method: 'eth_estimateGas',
+        params: [{ from: txParams.from, to: txParams.to, data: txParams.data, value: txParams.value }],
+      });
+      const n = parseInt(est, 16);
+      txParams.gas = `0x${Math.ceil(n * 1.3).toString(16)}`;
+    } catch {
+      txParams.gas = '0x50000';
+    }
+  }
+
   const hash = await provider.request({
     method: 'eth_sendTransaction',
-    params: [{
-      from: privyWallet.address,
-      to: tx.to,
-      data: tx.data,
-      value: tx.value || '0x0',
-    }],
+    params: [txParams],
   });
 
   return hash;
@@ -234,6 +252,7 @@ export async function executeDeposit(params: {
     to: txReq.to,
     data: txReq.data,
     value: txReq.value || '0x0',
+    gasLimit: txReq.gasLimit || txReq.gas || undefined,
   });
 
   const explorer = `${EXPLORERS[fromChainId] || 'https://basescan.org'}/tx/${hash}`;
@@ -292,6 +311,7 @@ export async function executeWithdraw(params: {
     to: txReq.to,
     data: txReq.data,
     value: txReq.value || '0x0',
+    gasLimit: txReq.gasLimit || txReq.gas || undefined,
   });
 
   const explorer = `${EXPLORERS[vaultChainId] || 'https://basescan.org'}/tx/${hash}`;
