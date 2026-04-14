@@ -1,7 +1,6 @@
-import { createPublicClient, createWalletClient, custom, http, parseAbi, type WalletClient } from 'viem';
+import { createPublicClient, http, parseAbi, encodeFunctionData } from 'viem';
 import { base, arbitrum, mainnet, optimism, polygon, bsc, avalanche, gnosis, linea, scroll } from 'viem/chains';
 
-// All chains LI.FI Earn supports
 const CHAIN_MAP: Record<number, any> = {
   1: mainnet, 8453: base, 42161: arbitrum, 10: optimism,
   137: polygon, 56: bsc, 43114: avalanche, 100: gnosis,
@@ -14,7 +13,6 @@ const ERC20_ABI = parseAbi([
   'function balanceOf(address) view returns (uint256)',
 ]);
 
-// Primary USDC address per chain — used for cross-chain source detection + withdrawal destination
 const STABLECOINS: Record<number, { symbol: string; address: string; decimals: number }[]> = {
   8453:   [{ symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 }],
   42161:  [{ symbol: 'USDC', address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 }],
@@ -49,42 +47,47 @@ const RPC_URLS: Record<number, string> = {
   59144: 'https://rpc.linea.build', 534352: 'https://rpc.scroll.io',
 };
 
-// ─── Privy-native chain switching ─────────────────────────────
-export async function getWalletClient(privyWallet: any, chainId: number): Promise<WalletClient> {
+function getPublicClient(chainId: number) {
   const chain = CHAIN_MAP[chainId] || base;
+  const rpc = RPC_URLS[chainId];
+  return createPublicClient({ chain, transport: http(rpc, { timeout: 10000 }) });
+}
 
-  // Use Privy's native switchChain — raw provider method doesn't work for embedded wallets
+// ─── Switch chain + send tx through Privy provider directly ───
+// Bypasses viem's chain validation which breaks with Privy embedded wallets
+async function privySendTx(
+  privyWallet: any,
+  chainId: number,
+  tx: { to: string; data: string; value?: string }
+): Promise<string> {
+  // Switch chain via Privy
   try {
     await privyWallet.switchChain(chainId);
-  } catch (e) {
-    console.warn('switchChain failed, trying provider fallback:', e);
+  } catch {
+    // Try provider-level fallback
     try {
-      const provider = await privyWallet.getEthereumProvider();
-      await provider.request({
+      const p = await privyWallet.getEthereumProvider();
+      await p.request({
         method: 'wallet_switchEthereumChain',
         params: [{ chainId: `0x${chainId.toString(16)}` }],
       });
-    } catch { /* proceed anyway */ }
+    } catch { /* proceed */ }
   }
 
+  // Small delay to let chain switch propagate
+  await new Promise(r => setTimeout(r, 300));
+
   const provider = await privyWallet.getEthereumProvider();
-  return createWalletClient({ chain, transport: custom(provider) });
-}
 
-export async function sendTransaction(
-  privyWallet: any,
-  tx: { to: string; data: string; value: string; chainId: number; gasLimit?: string }
-): Promise<string> {
-  const client = await getWalletClient(privyWallet, tx.chainId);
-  const account = privyWallet.address as `0x${string}`;
-
-  const hash = await client.sendTransaction({
-    account,
-    chain: CHAIN_MAP[tx.chainId] || base,
-    to: tx.to as `0x${string}`,
-    data: tx.data as `0x${string}`,
-    value: BigInt(tx.value || '0'),
-    gas: tx.gasLimit ? BigInt(tx.gasLimit) : undefined,
+  // Send through provider directly — no viem chain validation
+  const hash = await provider.request({
+    method: 'eth_sendTransaction',
+    params: [{
+      from: privyWallet.address,
+      to: tx.to,
+      data: tx.data,
+      value: tx.value || '0x0',
+    }],
   });
 
   return hash;
@@ -100,9 +103,7 @@ async function ensureApproval(params: {
   walletAddress: string;
 }): Promise<string | null> {
   const { privyWallet, tokenAddress, spenderAddress, amount, chainId, walletAddress } = params;
-  const chain = CHAIN_MAP[chainId] || base;
-  const rpc = RPC_URLS[chainId];
-  const publicClient = createPublicClient({ chain, transport: http(rpc, { timeout: 10000 }) });
+  const publicClient = getPublicClient(chainId);
 
   const allowance = await publicClient.readContract({
     address: tokenAddress as `0x${string}`,
@@ -114,22 +115,27 @@ async function ensureApproval(params: {
   if (allowance >= amount) return null;
 
   const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-  const client = await getWalletClient(privyWallet, chainId);
 
-  const hash = await client.writeContract({
-    account: walletAddress as `0x${string}`,
-    chain,
-    address: tokenAddress as `0x${string}`,
+  // Encode approve calldata manually
+  const data = encodeFunctionData({
     abi: ERC20_ABI,
     functionName: 'approve',
     args: [spenderAddress as `0x${string}`, MAX_UINT256],
   });
 
-  await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
+  // Send through Privy provider directly
+  const hash = await privySendTx(privyWallet, chainId, {
+    to: tokenAddress,
+    data,
+  });
+
+  // Wait for confirmation
+  await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}`, confirmations: 1 });
+
   return hash;
 }
 
-// ─── Detect best source chain — scans ALL 10 chains ──────────
+// ─── Detect best source chain ─────────────────────────────────
 export async function detectSourceChain(
   walletAddress: string,
   requiredAmount: number,
@@ -140,10 +146,7 @@ export async function detectSourceChain(
   await Promise.allSettled(
     Object.entries(STABLECOINS).map(async ([chainIdStr, tokens]) => {
       const chainId = parseInt(chainIdStr);
-      const chain = CHAIN_MAP[chainId];
-      if (!chain) return;
-      const rpc = RPC_URLS[chainId];
-      const client = createPublicClient({ chain, transport: http(rpc, { timeout: 6000 }) });
+      const client = getPublicClient(chainId);
 
       for (const token of tokens) {
         try {
@@ -157,18 +160,17 @@ export async function detectSourceChain(
           if (balance >= requiredAmount) {
             results.push({ chainId, tokenAddress: token.address, tokenDecimals: token.decimals, balance, gas: GAS_COSTS[chainId] ?? 0.3 });
           }
-        } catch { /* skip slow/dead RPCs */ }
+        } catch { /* skip */ }
       }
     })
   );
 
   if (results.length === 0) return null;
-  // Pick cheapest gas chain with sufficient balance
   results.sort((a, b) => a.gas - b.gas);
   return results[0];
 }
 
-// ─── Execute deposit: detect chain → approve → quote → sign ───
+// ─── Execute deposit ──────────────────────────────────────────
 export async function executeDeposit(params: {
   privyWallet: any;
   vaultAddress: string;
@@ -188,6 +190,7 @@ export async function executeDeposit(params: {
 
   const rawAmount = Math.floor(amount * (10 ** fromTokenDecimals)).toString();
 
+  // Get Composer quote
   const quoteRes = await fetch('/api/quote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -213,6 +216,7 @@ export async function executeDeposit(params: {
 
   if (!txReq) throw new Error('No transaction in quote response');
 
+  // Approve if needed
   let approvalHash: string | null = null;
   if (approvalAddress) {
     approvalHash = await ensureApproval({
@@ -225,12 +229,11 @@ export async function executeDeposit(params: {
     });
   }
 
-  const hash = await sendTransaction(privyWallet, {
+  // Send deposit tx through Privy provider
+  const hash = await privySendTx(privyWallet, txReq.chainId || fromChainId, {
     to: txReq.to,
     data: txReq.data,
-    value: txReq.value || '0',
-    chainId: txReq.chainId || fromChainId,
-    gasLimit: txReq.gasLimit,
+    value: txReq.value || '0x0',
   });
 
   const explorer = `${EXPLORERS[fromChainId] || 'https://basescan.org'}/tx/${hash}`;
@@ -285,12 +288,10 @@ export async function executeWithdraw(params: {
     });
   }
 
-  const hash = await sendTransaction(privyWallet, {
+  const hash = await privySendTx(privyWallet, txReq.chainId || vaultChainId, {
     to: txReq.to,
     data: txReq.data,
-    value: txReq.value || '0',
-    chainId: txReq.chainId || vaultChainId,
-    gasLimit: txReq.gasLimit,
+    value: txReq.value || '0x0',
   });
 
   const explorer = `${EXPLORERS[vaultChainId] || 'https://basescan.org'}/tx/${hash}`;
