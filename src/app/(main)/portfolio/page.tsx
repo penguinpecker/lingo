@@ -15,6 +15,7 @@ interface Position {
   protocolName: string; chainId: number;
   vaultAddress: string; underlyingTokenAddress: string;
   shareDecimals: number; shareBalanceRaw: string;
+  status: string;
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender, COLORS.orange];
@@ -57,6 +58,7 @@ export default function PortfolioPage() {
             underlyingTokenAddress: p.underlyingTokenAddress || '',
             shareDecimals: p.asset?.decimals || 18,
             shareBalanceRaw: p.balanceNative || '0',
+          status: p.status || 'live',
           };
         }).filter((p: Position) => p.current > 0.001);
         setPositions(pos);
@@ -160,7 +162,9 @@ export default function PortfolioPage() {
                     <div style={{ fontSize: 10, color: '#888', marginTop: 1 }}>{p.token} &middot; {p.chain}</div>
                   </div>
                 </div>
-                <Badge bg={COLORS.lavender + '20'} color={COLORS.lavender}>{p.chain}</Badge>
+                <Badge bg={p.status === 'pending' ? COLORS.warning + '20' : COLORS.lavender + '20'} color={p.status === 'pending' ? COLORS.warning : COLORS.lavender}>
+                  {p.status === 'pending' ? 'Bridging...' : p.chain}
+                </Badge>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -181,10 +185,10 @@ export default function PortfolioPage() {
                   fontWeight: 800, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
                   boxShadow: '1.5px 1.5px 0 #080808', textTransform: 'uppercase', letterSpacing: 0.8,
                 }}>Add more</button>
-                <button onClick={() => { setWithdrawIdx(i); setShowWithdraw(true); }} style={{
-                  flex: 1, background: COLORS.white, color: COLORS.black,
-                  border: `2px solid ${COLORS.black}`, borderRadius: 100, padding: '8px 0',
-                  fontWeight: 800, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                <button onClick={() => { setWithdrawIdx(i); setShowWithdraw(true); }} disabled={p.status === 'pending'} style={{
+                  flex: 1, background: COLORS.white, color: p.status === 'pending' ? '#ccc' : COLORS.black,
+                  border: `2px solid ${p.status === 'pending' ? COLORS.gray : COLORS.black}`, borderRadius: 100, padding: '8px 0',
+                  fontWeight: 800, fontSize: 11, fontFamily: 'inherit', cursor: p.status === 'pending' ? 'not-allowed' : 'pointer',
                   textTransform: 'uppercase', letterSpacing: 0.8,
                 }}>Withdraw</button>
               </div>
