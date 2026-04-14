@@ -7,7 +7,7 @@ import { SectionLabel, ProgressRing, Sparkline, Card, Button } from '@/component
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { getTrackedVaults } from '@/lib/wallet/deposit-tracker';
+import { getTrackedVaults, type TrackedVault } from '@/lib/wallet/deposit-tracker';
 
 interface Balance { chain: string; symbol: string; amount: number }
 interface Position {
@@ -16,6 +16,7 @@ interface Position {
   protocolName: string; chainId: number;
   vaultAddress: string; underlyingTokenAddress: string;
   shareDecimals: number; shareBalanceRaw: string;
+  status: string;
 }
 
 function DepositIcon({ size = 14, color = COLORS.orange }: { size?: number; color?: string }) {
@@ -26,6 +27,30 @@ function YieldIcon({ size = 14, color = COLORS.success }: { size?: number; color
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender];
+const CHAIN_NAMES: Record<number, string> = {
+  1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism',
+  137: 'Polygon', 56: 'BNB Chain', 43114: 'Avalanche', 100: 'Gnosis',
+};
+
+function trackedToPositions(vaults: TrackedVault[]): Position[] {
+  return vaults.map((v, i) => ({
+    name: PROTOCOL_NAMES[v.protocol] || v.protocol || 'Vault',
+    chain: CHAIN_NAMES[v.chainId] || v.network || 'Unknown',
+    token: v.token || 'USDC',
+    deposited: v.depositAmount || 0,
+    current: v.depositAmount || 0,
+    apy: 0,
+    color: TIER_COLORS[i % TIER_COLORS.length],
+    letter: (v.protocol || 'V').charAt(0).toUpperCase(),
+    protocolName: v.protocol || '',
+    chainId: v.chainId,
+    vaultAddress: v.vaultAddress,
+    underlyingTokenAddress: v.tokenAddress || '',
+    shareDecimals: v.shareDecimals || 18,
+    shareBalanceRaw: '0',
+    status: 'pending',
+  }));
+}
 
 export default function HomePage() {
   const router = useRouter();
@@ -37,6 +62,12 @@ export default function HomePage() {
   const [loadingBal, setLoadingBal] = useState(true);
   const [loadingPos, setLoadingPos] = useState(true);
   const [showWithdraw, setShowWithdraw] = useState(false);
+
+  // Show tracked deposits immediately
+  useEffect(() => {
+    const tracked = getTrackedVaults();
+    if (tracked.length > 0) setPositions(trackedToPositions(tracked));
+  }, []);
 
   // Fetch live balances
   useEffect(() => {
@@ -57,40 +88,45 @@ export default function HomePage() {
       .finally(() => setLoadingBal(false));
   }, [walletAddress]);
 
-  // Fetch live positions — uses tracked vaults for instant display
+  // Fetch live positions in background
   useEffect(() => {
     if (!walletAddress) { setLoadingPos(false); return; }
+    const tracked = getTrackedVaults();
 
-    const trackedVaults = getTrackedVaults();
-
-    const fetchPortfolio = trackedVaults.length > 0
-      ? fetch('/api/portfolio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
-        })
-      : fetch(`/api/portfolio?wallet=${walletAddress}`);
-
-    fetchPortfolio
+    fetch('/api/portfolio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet: walletAddress, trackedVaults: tracked }),
+    })
       .then(r => r.json())
       .then(d => {
-        const pos: Position[] = (d.positions || []).map((p: any, i: number) => ({
-          name: PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'Vault',
-          chain: p.asset?.name || 'Unknown',
-          token: p.asset?.symbol || '?',
-          deposited: parseFloat(p.balanceUsd || '0'),
-          current: parseFloat(p.balanceUsd || '0'),
-          apy: 0,
-          color: TIER_COLORS[i % TIER_COLORS.length],
-          letter: (PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'V').charAt(0).toUpperCase(),
-          protocolName: p.protocolName,
-          chainId: p.chainId || 0,
-          vaultAddress: p.vaultAddress || p.asset?.address || '',
-          underlyingTokenAddress: p.underlyingTokenAddress || '',
-          shareDecimals: p.asset?.decimals || 18,
-          shareBalanceRaw: p.balanceNative || '0',
-        }));
-        setPositions(pos.filter(p => p.current > 0.001));
+        const live = (d.positions || [])
+          .filter((p: any) => parseFloat(p.balanceUsd || '0') > 0.001)
+          .map((p: any, i: number) => ({
+            name: p.protocolName || p.asset?.name || 'Vault',
+            chain: p.chainName || 'Unknown',
+            token: p.asset?.symbol || '?',
+            deposited: parseFloat(p.balanceUsd || '0'),
+            current: parseFloat(p.balanceUsd || '0'),
+            apy: 0,
+            color: TIER_COLORS[i % TIER_COLORS.length],
+            letter: (p.protocolName || 'V').charAt(0).toUpperCase(),
+            protocolName: p.protocolName || '',
+            chainId: p.chainId || 0,
+            vaultAddress: p.vaultAddress || '',
+            underlyingTokenAddress: p.underlyingTokenAddress || '',
+            shareDecimals: p.asset?.decimals || 18,
+            shareBalanceRaw: p.balanceNative || '0',
+            status: p.status || 'live',
+          }));
+
+        if (live.length > 0) {
+          const liveKeys = new Set(live.map((p: Position) => `${p.vaultAddress.toLowerCase()}-${p.chainId}`));
+          const unmatched = trackedToPositions(tracked).filter(
+            p => !liveKeys.has(`${p.vaultAddress.toLowerCase()}-${p.chainId}`)
+          );
+          setPositions([...live, ...unmatched]);
+        }
       })
       .catch(() => {})
       .finally(() => setLoadingPos(false));
@@ -126,7 +162,6 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* Token breakdown */}
         <div style={{ display: 'flex', gap: 16, marginTop: 16, flexWrap: 'wrap' }}>
           {loadingBal ? (
             <>
@@ -143,7 +178,7 @@ export default function HomePage() {
               </div>
             ))
           ) : (
-            <div style={{ fontSize: 11, color: '#555' }}>No stablecoins found. Fund your wallet with USDC or USDT on any supported chain to start earning.</div>
+            <div style={{ fontSize: 11, color: '#555' }}>No stablecoins found. Fund your wallet to start earning.</div>
           )}
         </div>
       </div>
@@ -167,12 +202,7 @@ export default function HomePage() {
         Active positions
       </SectionLabel>
 
-      {loadingPos ? (
-        <>
-          <div className="skeleton" style={{ height: 72, marginBottom: 8 }} />
-          <div className="skeleton" style={{ height: 72, marginBottom: 8 }} />
-        </>
-      ) : positions.length === 0 ? (
+      {positions.length === 0 && !loadingPos ? (
         <Card variant="outlined" style={{ textAlign: 'center', padding: 32 }}>
           <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4 }}>No active positions</div>
           <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
@@ -189,6 +219,7 @@ export default function HomePage() {
           <div key={i} style={{
             background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 12,
             padding: 14, marginBottom: 8, boxShadow: '2px 2px 0 #080808', cursor: 'pointer',
+            opacity: p.status === 'pending' ? 0.85 : 1,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -205,6 +236,7 @@ export default function HomePage() {
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontWeight: 900, fontSize: 15 }}>${p.current.toFixed(2)}</div>
+                {p.status === 'pending' && <div style={{ fontSize: 9, color: COLORS.warning, fontWeight: 700 }}>Bridging...</div>}
               </div>
             </div>
           </div>
@@ -216,7 +248,7 @@ export default function HomePage() {
         <WithdrawSheet
           open={showWithdraw}
           onClose={() => setShowWithdraw(false)}
-          positions={positions.map(p => ({
+          positions={positions.filter(p => p.status === 'live').map(p => ({
             name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
             vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
             shareDecimals: p.shareDecimals, shareBalanceRaw: p.shareBalanceRaw,

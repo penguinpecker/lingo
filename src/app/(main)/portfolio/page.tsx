@@ -7,7 +7,7 @@ import { SectionLabel, VaultBadge, Badge, AllocationDonut, StrategyBar, Button, 
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { getTrackedVaults } from '@/lib/wallet/deposit-tracker';
+import { getTrackedVaults, type TrackedVault } from '@/lib/wallet/deposit-tracker';
 
 interface Position {
   name: string; chain: string; token: string;
@@ -15,10 +15,34 @@ interface Position {
   protocolName: string; chainId: number;
   vaultAddress: string; underlyingTokenAddress: string;
   shareDecimals: number; shareBalanceRaw: string;
-  status: string;
+  status: 'live' | 'pending';
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender, COLORS.orange];
+const CHAIN_NAMES: Record<number, string> = {
+  1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism',
+  137: 'Polygon', 56: 'BNB Chain', 43114: 'Avalanche', 100: 'Gnosis',
+  59144: 'Linea', 534352: 'Scroll',
+};
+
+// Convert tracked vaults to display positions — this is INSTANT, no API needed
+function trackedToPositions(vaults: TrackedVault[]): Position[] {
+  return vaults.map((v, i) => ({
+    name: PROTOCOL_NAMES[v.protocol] || v.protocol || 'Vault',
+    chain: CHAIN_NAMES[v.chainId] || v.network || 'Unknown',
+    token: v.token || 'USDC',
+    current: v.depositAmount || 0,
+    color: TIER_COLORS[i % TIER_COLORS.length],
+    letter: (v.protocol || 'V').charAt(0).toUpperCase(),
+    protocolName: v.protocol || '',
+    chainId: v.chainId,
+    vaultAddress: v.vaultAddress,
+    underlyingTokenAddress: v.tokenAddress || '',
+    shareDecimals: v.shareDecimals || 18,
+    shareBalanceRaw: '0',
+    status: 'pending' as const,
+  }));
+}
 
 export default function PortfolioPage() {
   const walletAddress = useStore(s => s.walletAddress);
@@ -29,39 +53,58 @@ export default function PortfolioPage() {
   const [withdrawIdx, setWithdrawIdx] = useState<number | undefined>(undefined);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // STEP 1: Show tracked deposits IMMEDIATELY on mount
   useEffect(() => {
-    if (!walletAddress) { setLoading(false); return; }
+    const tracked = getTrackedVaults();
+    if (tracked.length > 0) {
+      setPositions(trackedToPositions(tracked));
+    }
+  }, [refreshKey]);
+
+  // STEP 2: Try to enhance with live on-chain data in background
+  useEffect(() => {
+    if (!walletAddress) return;
     setLoading(true);
 
-    const trackedVaults = getTrackedVaults();
+    const tracked = getTrackedVaults();
 
-    // POST with tracked vaults for comprehensive scanning
     fetch('/api/portfolio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
+      body: JSON.stringify({ wallet: walletAddress, trackedVaults: tracked }),
     })
       .then(r => r.json())
       .then(d => {
-        const pos: Position[] = (d.positions || []).map((p: any, i: number) => {
-          const name = p.protocolName || p.asset?.name || 'Vault';
-          return {
-            name,
-            chain: p.chainName || 'Unknown',
-            token: p.asset?.symbol || '?',
-            current: parseFloat(p.balanceUsd || '0'),
-            color: TIER_COLORS[i % TIER_COLORS.length],
-            letter: name.charAt(0).toUpperCase(),
-            protocolName: p.protocolName || '',
-            chainId: p.chainId || 0,
-            vaultAddress: p.vaultAddress || p.asset?.address || '',
-            underlyingTokenAddress: p.underlyingTokenAddress || '',
-            shareDecimals: p.asset?.decimals || 18,
-            shareBalanceRaw: p.balanceNative || '0',
-          status: p.status || 'live',
-          };
-        }).filter((p: Position) => p.current > 0.001);
-        setPositions(pos);
+        const livePositions: Position[] = (d.positions || [])
+          .filter((p: any) => parseFloat(p.balanceUsd || '0') > 0.001)
+          .map((p: any, i: number) => {
+            const name = p.protocolName || p.asset?.name || 'Vault';
+            return {
+              name,
+              chain: p.chainName || CHAIN_NAMES[p.chainId] || 'Unknown',
+              token: p.asset?.symbol || '?',
+              current: parseFloat(p.balanceUsd || '0'),
+              color: TIER_COLORS[i % TIER_COLORS.length],
+              letter: name.charAt(0).toUpperCase(),
+              protocolName: p.protocolName || '',
+              chainId: p.chainId || 0,
+              vaultAddress: p.vaultAddress || p.asset?.address || '',
+              underlyingTokenAddress: p.underlyingTokenAddress || '',
+              shareDecimals: p.asset?.decimals || 18,
+              shareBalanceRaw: p.balanceNative || '0',
+              status: (p.status || 'live') as 'live' | 'pending',
+            };
+          });
+
+        if (livePositions.length > 0) {
+          // Merge: live data replaces tracked data for matching vaults, keep tracked for unmatched
+          const liveKeys = new Set(livePositions.map(p => `${p.vaultAddress.toLowerCase()}-${p.chainId}`));
+          const unmatchedTracked = trackedToPositions(tracked).filter(
+            p => !liveKeys.has(`${p.vaultAddress.toLowerCase()}-${p.chainId}`)
+          );
+          setPositions([...livePositions, ...unmatchedTracked]);
+        }
+        // If live returns empty, keep the tracked positions (already set in step 1)
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -81,7 +124,7 @@ export default function PortfolioPage() {
         </button>
       </div>
 
-      {loading ? (
+      {loading && positions.length === 0 ? (
         <>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <div className="skeleton" style={{ flex: 1, height: 60, borderRadius: 12 }} />
@@ -123,7 +166,7 @@ export default function PortfolioPage() {
             </div>
           </div>
 
-          {/* Allocation donut */}
+          {/* Allocation */}
           {positions.length > 1 && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 16, background: COLORS.white,
@@ -138,7 +181,7 @@ export default function PortfolioPage() {
                   {positions.map((p, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <div style={{ width: 6, height: 6, borderRadius: 2, background: p.color }} />
-                      <span style={{ fontSize: 10, fontWeight: 700 }}>{p.token}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700 }}>{p.name}</span>
                       <span style={{ fontSize: 10, color: '#888' }}>{totalCur > 0 ? Math.round(p.current / totalCur * 100) : 0}%</span>
                     </div>
                   ))}
@@ -153,6 +196,7 @@ export default function PortfolioPage() {
             <div key={i} style={{
               background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 14,
               padding: 16, marginBottom: 10, boxShadow: '2px 2px 0 #080808',
+              opacity: p.status === 'pending' ? 0.85 : 1,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -162,8 +206,11 @@ export default function PortfolioPage() {
                     <div style={{ fontSize: 10, color: '#888', marginTop: 1 }}>{p.token} &middot; {p.chain}</div>
                   </div>
                 </div>
-                <Badge bg={p.status === 'pending' ? COLORS.warning + '20' : COLORS.lavender + '20'} color={p.status === 'pending' ? COLORS.warning : COLORS.lavender}>
-                  {p.status === 'pending' ? 'Bridging...' : p.chain}
+                <Badge
+                  bg={p.status === 'pending' ? COLORS.warning + '20' : COLORS.success + '20'}
+                  color={p.status === 'pending' ? COLORS.warning : COLORS.success}
+                >
+                  {p.status === 'pending' ? 'Bridging...' : 'Live'}
                 </Badge>
               </div>
 
@@ -173,8 +220,8 @@ export default function PortfolioPage() {
                   <div style={{ fontSize: 18, fontWeight: 900 }}>${p.current.toFixed(2)}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>Vault</div>
-                  <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'monospace' }}>{p.vaultAddress.slice(0, 6)}...{p.vaultAddress.slice(-4)}</div>
+                  <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>Chain</div>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{p.chain}</div>
                 </div>
               </div>
 
@@ -185,12 +232,18 @@ export default function PortfolioPage() {
                   fontWeight: 800, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
                   boxShadow: '1.5px 1.5px 0 #080808', textTransform: 'uppercase', letterSpacing: 0.8,
                 }}>Add more</button>
-                <button onClick={() => { setWithdrawIdx(i); setShowWithdraw(true); }} disabled={p.status === 'pending'} style={{
-                  flex: 1, background: COLORS.white, color: p.status === 'pending' ? '#ccc' : COLORS.black,
-                  border: `2px solid ${p.status === 'pending' ? COLORS.gray : COLORS.black}`, borderRadius: 100, padding: '8px 0',
-                  fontWeight: 800, fontSize: 11, fontFamily: 'inherit', cursor: p.status === 'pending' ? 'not-allowed' : 'pointer',
-                  textTransform: 'uppercase', letterSpacing: 0.8,
-                }}>Withdraw</button>
+                <button
+                  onClick={() => { if (p.status === 'live') { setWithdrawIdx(i); setShowWithdraw(true); }}}
+                  style={{
+                    flex: 1, background: COLORS.white,
+                    color: p.status === 'pending' ? '#ccc' : COLORS.black,
+                    border: `2px solid ${p.status === 'pending' ? COLORS.gray : COLORS.black}`,
+                    borderRadius: 100, padding: '8px 0',
+                    fontWeight: 800, fontSize: 11, fontFamily: 'inherit',
+                    cursor: p.status === 'pending' ? 'not-allowed' : 'pointer',
+                    textTransform: 'uppercase', letterSpacing: 0.8,
+                  }}
+                >Withdraw</button>
               </div>
             </div>
           ))}
@@ -201,7 +254,7 @@ export default function PortfolioPage() {
         <WithdrawSheet
           open={showWithdraw}
           onClose={() => { setShowWithdraw(false); setWithdrawIdx(undefined); setRefreshKey(k => k + 1); }}
-          positions={positions.map(p => ({
+          positions={positions.filter(p => p.status === 'live').map(p => ({
             name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
             vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
             shareDecimals: p.shareDecimals, shareBalanceRaw: p.shareBalanceRaw,
