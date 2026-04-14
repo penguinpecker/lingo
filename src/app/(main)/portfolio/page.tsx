@@ -7,7 +7,7 @@ import { SectionLabel, VaultBadge, Badge, AllocationDonut, StrategyBar, Button, 
 import WithdrawSheet from '@/components/sheets/WithdrawSheet';
 import { useStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { getTrackedVaults, removeTrackedVault } from '@/lib/wallet/deposit-tracker';
+import { getTrackedVaults } from '@/lib/wallet/deposit-tracker';
 
 interface Position {
   name: string; chain: string; token: string;
@@ -15,7 +15,6 @@ interface Position {
   protocolName: string; chainId: number;
   vaultAddress: string; underlyingTokenAddress: string;
   shareDecimals: number; shareBalanceRaw: string;
-  source: string; // 'lifi' | 'onchain'
 }
 
 const TIER_COLORS = [COLORS.success, COLORS.warning, COLORS.error, COLORS.info, COLORS.lavender, COLORS.orange];
@@ -27,51 +26,57 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [withdrawIdx, setWithdrawIdx] = useState<number | undefined>(undefined);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!walletAddress) { setLoading(false); return; }
+    setLoading(true);
 
     const trackedVaults = getTrackedVaults();
 
-    // Use POST if we have tracked vaults (checks on-chain), GET otherwise
-    const fetchPortfolio = trackedVaults.length > 0
-      ? fetch('/api/portfolio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
-        })
-      : fetch(`/api/portfolio?wallet=${walletAddress}`);
-
-    fetchPortfolio
+    // POST with tracked vaults for comprehensive scanning
+    fetch('/api/portfolio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet: walletAddress, trackedVaults }),
+    })
       .then(r => r.json())
       .then(d => {
-        const pos: Position[] = (d.positions || []).map((p: any, i: number) => ({
-          name: PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'Vault',
-          chain: p.asset?.name || 'Unknown',
-          token: p.asset?.symbol || '?',
-          current: parseFloat(p.balanceUsd || '0'),
-          color: TIER_COLORS[i % TIER_COLORS.length],
-          letter: (PROTOCOL_NAMES[p.protocolName] || p.protocolName || 'V').charAt(0).toUpperCase(),
-          protocolName: p.protocolName,
-          chainId: p.chainId || 0,
-          vaultAddress: p.vaultAddress || p.asset?.address || '',
-          underlyingTokenAddress: p.underlyingTokenAddress || '',
-          shareDecimals: p.asset?.decimals || 18,
-          shareBalanceRaw: p.balanceNative || '0',
-          source: p.source || 'lifi',
-        }));
-        setPositions(pos.filter(p => p.current > 0.001));
+        const pos: Position[] = (d.positions || []).map((p: any, i: number) => {
+          const name = p.protocolName || p.asset?.name || 'Vault';
+          return {
+            name,
+            chain: p.chainName || 'Unknown',
+            token: p.asset?.symbol || '?',
+            current: parseFloat(p.balanceUsd || '0'),
+            color: TIER_COLORS[i % TIER_COLORS.length],
+            letter: name.charAt(0).toUpperCase(),
+            protocolName: p.protocolName || '',
+            chainId: p.chainId || 0,
+            vaultAddress: p.vaultAddress || p.asset?.address || '',
+            underlyingTokenAddress: p.underlyingTokenAddress || '',
+            shareDecimals: p.asset?.decimals || 18,
+            shareBalanceRaw: p.balanceNative || '0',
+          };
+        }).filter((p: Position) => p.current > 0.001);
+        setPositions(pos);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [walletAddress]);
+  }, [walletAddress, refreshKey]);
 
   const totalCur = positions.reduce((s, p) => s + p.current, 0);
 
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ fontWeight: 900, fontSize: 18, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 16 }}>
-        Portfolio
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ fontWeight: 900, fontSize: 18, textTransform: 'uppercase', letterSpacing: 1.5 }}>Portfolio</div>
+        <button onClick={() => setRefreshKey(k => k + 1)} style={{
+          background: 'none', border: `1.5px solid ${COLORS.gray}`, borderRadius: 8,
+          padding: '4px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          {loading ? '...' : 'Refresh'}
+        </button>
       </div>
 
       {loading ? (
@@ -96,20 +101,15 @@ export default function PortfolioPage() {
             No positions yet
           </div>
           <div style={{ fontSize: 13, color: '#888', marginBottom: 20, lineHeight: 1.5 }}>
-            Once you deposit into a strategy, your positions will appear here with live earnings tracking.
+            Deposit into a strategy to start earning. Your positions will appear here automatically.
           </div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-            <Button onClick={() => router.push('/earn')} style={{ maxWidth: 160 }}>
-              Start earning
-            </Button>
-            <Button onClick={() => router.push('/chat')} variant="outline" style={{ maxWidth: 160 }}>
-              Ask Lingo
-            </Button>
-          </div>
+          <Button onClick={() => router.push('/earn')} style={{ maxWidth: 160, margin: '0 auto' }}>
+            Start earning
+          </Button>
         </Card>
       ) : (
         <>
-          {/* Summary stats */}
+          {/* Summary */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <div style={{ flex: 1, background: COLORS.lightGray, borderRadius: 12, padding: 12, border: `2px solid ${COLORS.black}` }}>
               <div style={{ fontSize: 8, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>Positions</div>
@@ -121,7 +121,7 @@ export default function PortfolioPage() {
             </div>
           </div>
 
-          {/* Allocation */}
+          {/* Allocation donut */}
           {positions.length > 1 && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 16, background: COLORS.white,
@@ -136,7 +136,7 @@ export default function PortfolioPage() {
                   {positions.map((p, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       <div style={{ width: 6, height: 6, borderRadius: 2, background: p.color }} />
-                      <span style={{ fontSize: 10, fontWeight: 700 }}>{p.name}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700 }}>{p.token}</span>
                       <span style={{ fontSize: 10, color: '#888' }}>{totalCur > 0 ? Math.round(p.current / totalCur * 100) : 0}%</span>
                     </div>
                   ))}
@@ -146,7 +146,7 @@ export default function PortfolioPage() {
           )}
 
           {/* Position cards */}
-          <SectionLabel>Positions</SectionLabel>
+          <SectionLabel>Active Positions</SectionLabel>
           {positions.map((p, i) => (
             <div key={i} style={{
               background: COLORS.white, border: `2px solid ${COLORS.black}`, borderRadius: 14,
@@ -160,15 +160,17 @@ export default function PortfolioPage() {
                     <div style={{ fontSize: 10, color: '#888', marginTop: 1 }}>{p.token} &middot; {p.chain}</div>
                   </div>
                 </div>
-                {p.source === 'onchain' && (
-                  <Badge bg={COLORS.lavender + '20'} color={COLORS.lavender}>on-chain</Badge>
-                )}
+                <Badge bg={COLORS.lavender + '20'} color={COLORS.lavender}>{p.chain}</Badge>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <div>
                   <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>Value</div>
                   <div style={{ fontSize: 18, fontWeight: 900 }}>${p.current.toFixed(2)}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 9, color: '#888', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>Vault</div>
+                  <div style={{ fontSize: 10, fontWeight: 700, fontFamily: 'monospace' }}>{p.vaultAddress.slice(0, 6)}...{p.vaultAddress.slice(-4)}</div>
                 </div>
               </div>
 
@@ -194,7 +196,7 @@ export default function PortfolioPage() {
       {positions.length > 0 && (
         <WithdrawSheet
           open={showWithdraw}
-          onClose={() => { setShowWithdraw(false); setWithdrawIdx(undefined); }}
+          onClose={() => { setShowWithdraw(false); setWithdrawIdx(undefined); setRefreshKey(k => k + 1); }}
           positions={positions.map(p => ({
             name: p.name, chain: p.chain, chainId: p.chainId, token: p.token,
             vaultAddress: p.vaultAddress, underlyingTokenAddress: p.underlyingTokenAddress,
