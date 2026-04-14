@@ -128,7 +128,7 @@ export default function DepositSheet({
               <div style={{ marginTop: 8 }}>
                 {strategy.allocations.map((a, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                    <span style={{ fontWeight: 700 }}>{PROTOCOL_NAMES[a.vault.protocol] || a.vault.protocol}</span>
+                    <span style={{ fontWeight: 700 }}>{a.vault.protocol}</span>
                     <span style={{ color: '#888' }}>{Math.round(a.weight * 100)}% &middot; {a.vault.token} &middot; {a.vault.network}</span>
                   </div>
                 ))}
@@ -198,13 +198,13 @@ export default function DepositSheet({
           <div style={{ fontSize: 9, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Allocation</div>
           {strategy.allocations.map((a, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: i < strategy.allocations.length - 1 ? `1px solid ${COLORS.lightGray}` : 'none' }}>
-              <VaultBadge letter={(PROTOCOL_NAMES[a.vault.protocol] || 'V').charAt(0)} color={tier.color} size={24} />
+              <VaultBadge letter={a.vault.protocol.charAt(0).toUpperCase()} color={tier.color} size={24} />
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 700 }}>{PROTOCOL_NAMES[a.vault.protocol] || a.vault.protocol}</div>
-                <div style={{ fontSize: 10, color: '#888' }}>{a.vault.network} &middot; {a.vault.token}</div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{a.vault.protocol}{PROTOCOL_NAMES[a.vault.protocol] ? <span style={{ color: '#888', fontWeight: 600 }}> ({PROTOCOL_NAMES[a.vault.protocol]})</span> : ''}</div>
+                <div style={{ fontSize: 10, color: '#888' }}>{a.vault.network} &middot; {a.vault.token} &middot; {Math.round(a.weight * 100)}%</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 12, fontWeight: 800 }}>${(numAmount * a.weight).toFixed(0)}</div>
+                <div style={{ fontSize: 12, fontWeight: 800 }}>${(numAmount * a.weight).toFixed(2)}</div>
                 <div style={{ fontSize: 10, color: tier.color, fontWeight: 700 }}>{a.vault.netApy}%</div>
               </div>
             </div>
