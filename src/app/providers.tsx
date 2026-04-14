@@ -12,7 +12,18 @@ const ALL_CHAINS = [base, arbitrum, mainnet, optimism, polygon, bsc, avalanche, 
 
 const wagmiConfig = createConfig({
   chains: ALL_CHAINS,
-  transports: Object.fromEntries(ALL_CHAINS.map(c => [c.id, http()])),
+  transports: {
+    [base.id]: http(),
+    [arbitrum.id]: http(),
+    [mainnet.id]: http(),
+    [optimism.id]: http(),
+    [polygon.id]: http(),
+    [bsc.id]: http(),
+    [avalanche.id]: http(),
+    [gnosis.id]: http(),
+    [linea.id]: http(),
+    [scroll.id]: http(),
+  },
 });
 
 const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || '';
